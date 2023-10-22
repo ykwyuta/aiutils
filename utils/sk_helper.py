@@ -4,6 +4,8 @@ from typing import Dict, List
 import semantic_kernel as sk
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from langchain.text_splitter import CharacterTextSplitter
+from langchain.utilities.duckduckgo_search import DuckDuckGoSearchAPIWrapper
+from langchain.utilities.wikipedia import WikipediaAPIWrapper
 
 deployment = "gpt-35-turbo"
 endpoint = os.environ["OPENAI_API_BASE"]
@@ -58,7 +60,7 @@ class SkHelper:
         result = chat.invoke(context=context)
         return result.result
 
-    def extract_keywords(self, text: str) -> Dict[str, str]:
+    def extract_keywords(self, text: str) -> List[Dict[str, str]]:
         prompt="""
         Identify and describe the keywords in the following text: TEXT. Please format your response as follows: 
         "Keyword:<keyword>; Description:<description>;"
@@ -80,9 +82,52 @@ class SkHelper:
         context["text"] = text
         result = chat.invoke(context=context)
         answer_text = result.result
-        regex_pattern = re.compile(r'Keyword:(.*?); Description:(.*?);')
-        keywords_descriptions = regex_pattern.findall(answer_text)
+        keywords_descriptions = []
+        for line in answer_text.split("\n"):
+            item = line.strip().split(";")
+            if len(item) < 2:
+                continue
+            keywords_descriptions.append({
+                "keyword": item[0].replace("Keyword", "").replace(":", "").strip(),
+                "description": item[1].replace("Description", "").replace(":", "").strip()
+            })
         return keywords_descriptions
+    
+    def extract_keywords_with_search(self, text: str, domain: str = None) -> List[Dict[str, str]]:
+        keywords_descriptions = self.extract_keywords(text)
+        for keyword_description in keywords_descriptions:
+            try:
+                keyword = keyword_description["keyword"]
+                query = keyword
+                snippets = self.get_snippets(query, domain)
+                keyword_description["search"] = "".join([snippet.replace("\n", "") for snippet in snippets])
+            except Exception as e:
+                pass
+        return keywords_descriptions
+
+    def extract_keywords_with_wikipedia(self, text: str) -> List[Dict[str, str]]:
+        keywords_descriptions = self.extract_keywords(text)
+        for keyword_description in keywords_descriptions:
+            try:
+                keyword = keyword_description["keyword"]
+                query = keyword
+                summary = self.get_wikipedia_summary(query)
+                keyword_description["wikipedia"] = summary[:500]
+            except Exception as e:
+                pass
+        return keywords_descriptions
+
+    def get_wikipedia_summary(self, query: str) -> str:
+        wikipedia = WikipediaAPIWrapper()
+        result = wikipedia.run(query)
+        return result
+
+    def get_snippets(self, query: str, domain:str =  None) -> List[str]:
+        search = DuckDuckGoSearchAPIWrapper()
+        if domain is not None:
+            query = "{0} site:{1}".format(query, self.domain)
+        result=search.get_snippets(query)
+        return result
 
     def question_and_answer(self, text: str) -> List[Dict[str, str]]:
         prompt="""
@@ -112,7 +157,7 @@ Question: What does the sun provide that sustains life on Earth?; Answer: Light 
         question_and_answer_list = []
         for line in question_and_answer.split("\n"):
             item = line.strip().split(";")
-            if len(item) != 3:
+            if len(item) < 3:
                 continue
             question_and_answer_list.append({
                 "question": item[0].replace("Question", "").replace(":", "").strip(),

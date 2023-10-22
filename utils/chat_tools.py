@@ -19,3 +19,4 @@ def get_url_content(url: str, chunk_size = 1000) -> List[str]:
     for paragraph in paragraphs:
         article_text += paragraph.text + '\n'
     return text_splitter.split_text(article_text)
+
